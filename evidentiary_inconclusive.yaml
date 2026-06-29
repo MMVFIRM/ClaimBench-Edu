@@ -1,0 +1,480 @@
+from __future__ import annotations
+
+import argparse
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
+import json
+import mimetypes
+import traceback
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
+from typing import Any, Dict, Optional
+from urllib.parse import parse_qs, urlparse
+
+from .adjudicator import (
+    build_evidence_from_form,
+    extract_text_from_upload,
+    make_record,
+    proposed_grade,
+    propose_claims,
+)
+from .storage import StudioStore, canonical_json, now_iso
+
+try:  # optional signing for local academic adjudication artifacts
+    from claimbench.crypto import load_private_key, make_signature_envelope
+except Exception:  # pragma: no cover
+    load_private_key = None
+    make_signature_envelope = None
+
+HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ClaimBench Edu Studio</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --card:#ffffff; --muted:#64748b; --line:#e5e7eb; --accent:#2563eb; --good:#166534; --bad:#991b1b; --warn:#92400e; }
+    body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial, sans-serif; background:#f8fafc; color:#0f172a; }
+    header { background:linear-gradient(135deg,#0f172a,#1e3a8a); color:white; padding:26px 34px; }
+    header h1 { margin:0 0 4px; font-size:28px; }
+    header p { margin:0; color:#cbd5e1; }
+    main { display:grid; grid-template-columns: 340px 1fr; gap:20px; padding:20px; }
+    section, .card { background:white; border:1px solid var(--line); border-radius:14px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
+    section { padding:16px; }
+    h2 { font-size:18px; margin:0 0 12px; }
+    h3 { font-size:16px; margin:0 0 8px; }
+    .muted { color:var(--muted); font-size:13px; }
+    label { display:block; font-size:12px; color:#334155; margin-top:10px; font-weight:650; }
+    input, textarea, select { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:10px; padding:9px 10px; font:inherit; background:white; }
+    textarea { min-height:74px; resize:vertical; }
+    button { border:0; border-radius:10px; background:var(--accent); color:white; padding:9px 12px; font-weight:700; cursor:pointer; margin-top:10px; }
+    button.secondary { background:#334155; }
+    button.ghost { background:#e2e8f0; color:#0f172a; }
+    button.good { background:var(--good); }
+    button.bad { background:var(--bad); }
+    .project { padding:10px; border:1px solid var(--line); border-radius:12px; margin-bottom:8px; cursor:pointer; }
+    .project:hover { border-color:#93c5fd; }
+    .project.active { border-color:var(--accent); background:#eff6ff; }
+    .claim { padding:16px; margin-bottom:14px; }
+    .badge { display:inline-block; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:800; background:#dbeafe; color:#1e40af; }
+    .badge.refuted { background:#fee2e2; color:#991b1b; }
+    .badge.inconclusive { background:#fef3c7; color:#92400e; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .cols { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .reason { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .reason label { display:inline-flex; gap:5px; align-items:center; margin:0; font-weight:500; }
+    .reason input { width:auto; }
+    pre { background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px; overflow:auto; font-size:12px; }
+    .status { white-space:pre-wrap; background:#f1f5f9; border:1px solid var(--line); border-radius:12px; padding:10px; margin-top:10px; }
+    .tabs { display:flex; gap:8px; margin-bottom:10px; }
+    .pill { border:1px solid var(--line); border-radius:999px; padding:4px 8px; font-size:12px; color:#334155; }
+    @media (max-width: 900px) { main, .cols, .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ClaimBench Edu Studio</h1>
+  <p>Open-source academic claim adjudication UI. Machine proposes; human certifies, overrides, or abstains.</p>
+</header>
+<main>
+  <aside>
+    <section>
+      <h2>1. Upload Paper</h2>
+      <form id="uploadForm">
+        <label>Paper file (.txt/.md; PDF best-effort with optional pypdf)</label>
+        <input type="file" name="paper" required />
+        <button type="submit">Upload & Extract Claims</button>
+      </form>
+      <div class="status" id="uploadStatus">Ready.</div>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Projects</h2>
+      <div id="projects"></div>
+      <button class="ghost" onclick="loadProjects()">Refresh</button>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Exports</h2>
+      <p class="muted">Human feedback is split so training data never becomes validation truth by accident.</p>
+      <div id="exports"></div>
+    </section>
+  </aside>
+
+  <section>
+    <h2 id="projectTitle">Select or upload a paper</h2>
+    <p class="muted" id="projectMeta"></p>
+    <div class="cols">
+      <div>
+        <h3>Add / Grade a Claim</h3>
+        <label>Claim statement</label>
+        <textarea id="claimStatement" placeholder="Paste or edit a comparative empirical claim..."></textarea>
+        <div class="grid">
+          <div><label>Metric name</label><input id="metricName" placeholder="accuracy" /></div>
+          <div><label>Higher is better?</label><select id="higherBetter"><option value="true">true</option><option value="false">false</option></select></div>
+          <div><label>Method name</label><input id="methodName" placeholder="our method" /></div>
+          <div><label>Method score</label><input id="methodScore" placeholder="0.87" /></div>
+          <div><label>Baseline name</label><input id="baselineName" placeholder="baseline" /></div>
+          <div><label>Baseline score</label><input id="baselineScore" placeholder="0.84" /></div>
+          <div><label>Baseline fair?</label><select id="baselineFair"><option value="true">true</option><option value="false">false</option></select></div>
+          <div><label>Fairness source</label><select id="fairnessSource"><option value="self_reported">self_reported</option><option value="independently_verified">independently_verified</option></select></div>
+          <div><label>Budget / scope note</label><input id="budget" placeholder="same stored-float budget" /></div>
+          <div><label>Strictness</label><select id="strictness"><option value="strict_fairness">strict_fairness</option><option value="lenient">lenient</option></select></div>
+        </div>
+        <button onclick="addClaim()">Grade Claim</button>
+      </div>
+      <div>
+        <h3>Trust Boundary</h3>
+        <p class="muted">The system proposal is not ground truth. A human decision creates an adjudication artifact and optionally a training or validation row.</p>
+        <pre>Certify = accept proposed verdict
+Override = human verdict replaces proposal
+Abstain = not truth; route to review
+Needs Panel = not truth until panel-confirmed
+
+Training rows may improve the model.
+Validation rows measure it.
+Never mix them.</pre>
+      </div>
+    </div>
+    <hr style="border:0;border-top:1px solid #e5e7eb;margin:18px 0"/>
+    <h2>Claim Cards</h2>
+    <div id="claims"></div>
+  </section>
+</main>
+<script>
+let currentProject = null;
+function qs(id){ return document.getElementById(id); }
+function html(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+async function api(path, opts={}){
+  const r = await fetch(path, opts);
+  const t = await r.text();
+  let data; try { data = JSON.parse(t); } catch(e) { data = {raw:t}; }
+  if(!r.ok){ throw new Error(data.error || t); }
+  return data;
+}
+async function loadProjects(){
+  const data = await api('/api/projects');
+  qs('projects').innerHTML = data.projects.map(p => `<div class="project ${currentProject && currentProject.id===p.id?'active':''}" onclick="loadProject('${p.id}')"><b>${html(p.title)}</b><br><span class="muted">${p.claim_count} claims · ${html(p.id)}</span></div>`).join('') || '<p class="muted">No projects yet.</p>';
+  qs('exports').innerHTML = Object.keys(data.exports).map(k => `<div><a href="/api/export/${k}" target="_blank">${k}</a></div>`).join('');
+}
+async function loadProject(id){
+  currentProject = await api('/api/project?id='+encodeURIComponent(id));
+  qs('projectTitle').textContent = currentProject.title;
+  qs('projectMeta').textContent = `${currentProject.source_filename || ''} · ${currentProject.extraction_method || ''} · ${currentProject.source_sha256 || ''}`;
+  renderClaims(); loadProjects();
+}
+function renderClaims(){
+  if(!currentProject){ qs('claims').innerHTML=''; return; }
+  qs('claims').innerHTML = (currentProject.claims||[]).map(c => claimHtml(c)).join('') || '<p class="muted">No claims. Add one above.</p>';
+}
+function badgeClass(b){ const low=(b||'').toLowerCase(); if(low.includes('refut')) return 'refuted'; if(low.includes('inconclusive')||low.includes('boundary')||low.includes('out')) return 'inconclusive'; return ''; }
+function claimHtml(c){
+  const p = c.proposal || {};
+  const rid = `r_${c.id.replace(/[^a-zA-Z0-9]/g,'_')}`;
+  return `<div class="card claim">
+    <div><span class="pill">${html(c.id)}</span> <span class="pill">${html(p.mode || 'ungraded')}</span> <span class="badge ${badgeClass(p.badge)}">${html(p.badge || 'No grade yet')}</span></div>
+    <h3>${html(c.statement)}</h3>
+    <p class="muted"><b>Reason:</b> ${html(p.reason || c.reason || '')}</p>
+    <details><summary>Evidence / proposal JSON</summary><pre>${html(JSON.stringify(p, null, 2))}</pre></details>
+    <div class="grid">
+      <div><label>Reviewer ID</label><input id="${rid}_reviewer" placeholder="reviewer_001" value="reviewer_001" /></div>
+      <div><label>Human action</label><select id="${rid}_action"><option value="certify">Certify proposal</option><option value="override">Override</option><option value="abstain">Abstain</option><option value="needs_panel_review">Needs panel review</option><option value="disputed">Disputed</option></select></div>
+      <div><label>Human verdict</label><select id="${rid}_verdict"><option value="${html(p.verdict||'evidentiary_inconclusive')}">${html(p.verdict||'evidentiary_inconclusive')} (proposal)</option><option value="pass">pass</option><option value="fail">fail</option><option value="semantic_boundary">semantic_boundary</option><option value="evidentiary_inconclusive">evidentiary_inconclusive</option><option value="out_of_scope">out_of_scope</option></select></div>
+      <div><label>Dataset split</label><select id="${rid}_split"><option value="training">training</option><option value="validation">validation</option><option value="panel">panel</option><option value="disputed">disputed</option><option value="do_not_use">do_not_use</option></select></div>
+    </div>
+    <label>Override / certification rationale</label><textarea id="${rid}_rationale" placeholder="Why is the proposal correct or wrong? Cite spans/tables if possible."></textarea>
+    <div class="reason">
+      ${['wrong_claim_extraction','wrong_evidence_span','missing_stronger_baseline','misread_metric','misread_budget','unsupported_formalization','semantic_ambiguity','statistical_insufficiency','out_of_scope','correct'].map(x=>`<label><input type="checkbox" id="${rid}_reason_${x}"/>${x}</label>`).join('')}
+    </div>
+    <button class="good" onclick="reviewClaim('${c.id}')">Save Human Decision</button>
+  </div>`;
+}
+async function addClaim(){
+  if(!currentProject){ alert('Upload or select a project first.'); return; }
+  const body = {
+    project_id: currentProject.id,
+    statement: qs('claimStatement').value,
+    metric_name: qs('metricName').value,
+    higher_better: qs('higherBetter').value,
+    method_name: qs('methodName').value,
+    method_score: qs('methodScore').value,
+    baseline_name: qs('baselineName').value,
+    baseline_score: qs('baselineScore').value,
+    baseline_fair: qs('baselineFair').value,
+    fairness_source: qs('fairnessSource').value,
+    budget: qs('budget').value,
+    strictness: qs('strictness').value
+  };
+  currentProject = await api('/api/add_claim',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  renderClaims(); loadProjects();
+}
+async function reviewClaim(claimId){
+  const rid = `r_${claimId.replace(/[^a-zA-Z0-9]/g,'_')}`;
+  const reasons = ['wrong_claim_extraction','wrong_evidence_span','missing_stronger_baseline','misread_metric','misread_budget','unsupported_formalization','semantic_ambiguity','statistical_insufficiency','out_of_scope','correct'].filter(x => qs(`${rid}_reason_${x}`).checked);
+  const body = { project_id: currentProject.id, claim_id: claimId, reviewer_id: qs(`${rid}_reviewer`).value, action: qs(`${rid}_action`).value, human_verdict: qs(`${rid}_verdict`).value, dataset_split: qs(`${rid}_split`).value, rationale: qs(`${rid}_rationale`).value, reason_codes: reasons };
+  const res = await api('/api/review',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  currentProject = res.project;
+  alert('Saved. Artifact: '+res.artifact_path+'\nExport: '+res.export_file);
+  renderClaims(); loadProjects();
+}
+qs('uploadForm').addEventListener('submit', async (ev)=>{
+  ev.preventDefault();
+  const fd = new FormData(qs('uploadForm'));
+  qs('uploadStatus').textContent='Uploading...';
+  try{
+    const res = await api('/api/upload',{method:'POST',body:fd});
+    qs('uploadStatus').textContent=`Created ${res.project.id}. Proposed claims: ${res.project.claims.length}.`;
+    currentProject = res.project; renderClaims(); loadProjects();
+  }catch(e){ qs('uploadStatus').textContent='ERROR: '+e.message; }
+});
+loadProjects();
+</script>
+</body>
+</html>
+"""
+
+
+def parse_multipart_file(headers: Dict[str, str], body: bytes, field_name: str = "paper") -> tuple[str, bytes]:
+    """Parse a single uploaded file from multipart/form-data without cgi.
+
+    Python 3.13 removed the cgi module, so Studio uses the stdlib email parser.
+    """
+    content_type = headers.get("content-type") or headers.get("Content-Type") or ""
+    msg_bytes = (f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body)
+    msg = BytesParser(policy=email_default_policy).parsebytes(msg_bytes)
+    if not msg.is_multipart():
+        raise ValueError("Expected multipart/form-data upload.")
+    for part in msg.iter_parts():
+        disp = part.get("Content-Disposition", "")
+        params = dict(part.get_params(header="content-disposition") or [])
+        if params.get("name") == field_name:
+            filename = params.get("filename") or "paper.txt"
+            payload = part.get_payload(decode=True) or b""
+            return Path(filename).name, payload
+    raise ValueError(f"Missing multipart file field: {field_name}")
+
+
+class StudioServer(BaseHTTPRequestHandler):
+    store: StudioStore
+    private_key: Any = None
+    issuer: str = "claimbench-edu-local"
+
+    def _send_json(self, data: Dict[str, Any], status: int = 200) -> None:
+        raw = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json; charset=utf-8")
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _send_text(self, text: str, content_type: str = "text/html; charset=utf-8", status: int = 200) -> None:
+        raw = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _error(self, exc: Exception, status: int = 400) -> None:
+        self._send_json({"error": str(exc), "trace": traceback.format_exc(limit=1)}, status=status)
+
+    def do_GET(self) -> None:  # noqa: N802
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            q = parse_qs(parsed.query)
+            if path == "/":
+                return self._send_text(HTML)
+            if path == "/api/projects":
+                return self._send_json({"projects": self.store.list_projects(), "exports": self.store.export_paths()})
+            if path == "/api/project":
+                pid = q.get("id", [""])[0]
+                return self._send_json(self.store.load_project(pid))
+            if path.startswith("/api/export/"):
+                name = path.rsplit("/", 1)[-1]
+                f = self.store.exports_dir / name
+                if not f.exists() or f.suffix != ".jsonl":
+                    raise FileNotFoundError(name)
+                ctype = mimetypes.guess_type(str(f))[0] or "application/jsonl"
+                raw = f.read_bytes()
+                self.send_response(200)
+                self.send_header("content-type", ctype)
+                self.send_header("content-disposition", f"attachment; filename={name}")
+                self.send_header("content-length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._send_json({"error": "not found"}, status=404)
+        except Exception as exc:
+            self._error(exc)
+
+    def _read_json(self) -> Dict[str, Any]:
+        length = int(self.headers.get("content-length", "0"))
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8") or "{}")
+
+    def do_POST(self) -> None:  # noqa: N802
+        try:
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/upload":
+                length = int(self.headers.get("content-length", "0"))
+                body = self.rfile.read(length)
+                filename, content = parse_multipart_file(dict(self.headers), body, field_name="paper")
+                text, method = extract_text_from_upload(filename, content)
+                claims = [c.__dict__ for c in propose_claims(text)]
+                project = self.store.create_project(filename, content, text, method, claims)
+                return self._send_json({"project": project})
+            if parsed.path == "/api/add_claim":
+                data = self._read_json()
+                project = self.store.load_project(data["project_id"])
+                statement = (data.get("statement") or "").strip()
+                if not statement:
+                    raise ValueError("Claim statement is required.")
+                evidence = build_evidence_from_form(data)
+                proposal = proposed_grade(statement, evidence, strictness=data.get("strictness", "strict_fairness"))
+                claim_id = f"C{len(project.get('claims', [])) + 1}"
+                claim = {
+                    "id": claim_id,
+                    "statement": statement,
+                    "confidence": "manual",
+                    "reason": "manual claim added in Studio",
+                    "proposal": proposal,
+                    "extraction_provenance": "human_verified",
+                    "human_reviews": [],
+                }
+                project.setdefault("claims", []).append(claim)
+                self.store.save_project(project)
+                return self._send_json(project)
+            if parsed.path == "/api/review":
+                data = self._read_json()
+                project = self.store.load_project(data["project_id"])
+                claim = next((c for c in project.get("claims", []) if c.get("id") == data["claim_id"]), None)
+                if not claim:
+                    raise KeyError(data["claim_id"])
+                proposal = claim.get("proposal", {})
+                action = data.get("action", "certify")
+                human_verdict = data.get("human_verdict") or proposal.get("verdict", "evidentiary_inconclusive")
+                if action == "certify":
+                    human_verdict = proposal.get("verdict", human_verdict)
+                    review_status = "single_reviewer_label"
+                elif action == "override":
+                    review_status = "single_reviewer_label"
+                elif action == "needs_panel_review":
+                    review_status = "needs_panel_review"
+                elif action == "disputed":
+                    review_status = "disputed"
+                else:
+                    review_status = "needs_panel_review"
+
+                record = make_record(project, claim)
+                review = {
+                    "reviewed_at": now_iso(),
+                    "reviewer_id": data.get("reviewer_id", "reviewer_001"),
+                    "action": action,
+                    "human_verdict": human_verdict,
+                    "review_status": review_status,
+                    "dataset_split": data.get("dataset_split", "training"),
+                    "rationale": data.get("rationale", ""),
+                    "reason_codes": data.get("reason_codes", []),
+                    "labeled_by_model": False,
+                }
+                claim.setdefault("human_reviews", []).append(review)
+
+                artifact_core = {
+                    "schema": "claimbench_edu.adjudication_artifact.v0.1",
+                    "project_id": project["id"],
+                    "record_id": claim["id"],
+                    "paper_sha256": project.get("source_sha256"),
+                    "claim_statement": claim.get("statement"),
+                    "machine_proposal": proposal,
+                    "human_decision": review,
+                    "paper_record": record,
+                    "trust_boundary": "human_label_is_ground_truth_candidate; machine_proposal_is_not_ground_truth",
+                }
+                artifact: Dict[str, Any] = {"artifact_core": artifact_core, "signatures": []}
+                if self.private_key is not None and make_signature_envelope is not None:
+                    artifact["signatures"].append(make_signature_envelope(artifact_core, self.private_key, issuer=self.issuer, signed_payload="adjudication_artifact_core"))
+                else:
+                    artifact["signature_status"] = "unsigned_local_academic_artifact"
+                path = self.store.write_adjudication_artifact(artifact)
+                review["artifact_path"] = str(path.relative_to(self.store.root))
+
+                # RLHF training row: always useful as feedback, but not automatically truth.
+                rlhf_row = {
+                    "schema": "claimbench_edu.rlhf_feedback.v0.1",
+                    "project_id": project["id"],
+                    "record_id": claim["id"],
+                    "input_claim": claim.get("statement"),
+                    "machine_proposal": proposal,
+                    "human_decision": review,
+                    "reason_codes": review["reason_codes"],
+                    "paper_sha256": project.get("source_sha256"),
+                }
+                self.store.append_export("rlhf_training.jsonl", rlhf_row)
+                export_file = "rlhf_training.jsonl"
+
+                label_row = {
+                    "record_id": claim["id"],
+                    "verdict": human_verdict,
+                    "claim_class": proposal.get("claim_class", "comparative_empirical"),
+                    "rationale": review.get("rationale", ""),
+                    "confidence": "medium",
+                    "reviewer_id": review["reviewer_id"],
+                    "review_status": review_status,
+                    "labeled_by_model": False,
+                    "source_project_id": project["id"],
+                    "artifact_path": review["artifact_path"],
+                }
+                split = review["dataset_split"]
+                if split == "validation" and review_status == "single_reviewer_label":
+                    self.store.append_export("validation_labels.jsonl", label_row)
+                    export_file += " + validation_labels.jsonl"
+                elif split == "panel":
+                    label_row["review_status"] = "panel_confirmed_label" if review_status == "single_reviewer_label" else review_status
+                    self.store.append_export("panel_labels.jsonl", label_row)
+                    export_file += " + panel_labels.jsonl"
+                elif split == "disputed" or review_status == "disputed":
+                    self.store.append_export("disputed_labels.jsonl", label_row)
+                    export_file += " + disputed_labels.jsonl"
+                elif split == "do_not_use":
+                    self.store.append_export("do_not_use.jsonl", rlhf_row)
+                    export_file += " + do_not_use.jsonl"
+
+                self.store.save_project(project)
+                return self._send_json({"project": project, "artifact_path": review["artifact_path"], "export_file": export_file})
+            self._send_json({"error": "not found"}, status=404)
+        except Exception as exc:
+            self._error(exc)
+
+
+def run_server(workspace: str, host: str = "127.0.0.1", port: int = 8765, sign_private_key: Optional[str] = None, issuer: str = "claimbench-edu-local") -> None:
+    store = StudioStore(workspace)
+    handler = StudioServer
+    handler.store = store
+    handler.issuer = issuer
+    if sign_private_key:
+        if load_private_key is None:
+            raise RuntimeError("claimbench.crypto is unavailable; cannot sign artifacts.")
+        handler.private_key = load_private_key(sign_private_key)
+    else:
+        handler.private_key = None
+    server = ThreadingHTTPServer((host, port), handler)
+    print(f"ClaimBench Edu Studio running at http://{host}:{port}")
+    print(f"Workspace: {store.root}")
+    print("Press Ctrl+C to stop.")
+    server.serve_forever()
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Run ClaimBench Edu Studio local web UI")
+    ap.add_argument("--workspace", default="claimbench_edu_workspace")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--sign-private-key", help="Optional Ed25519 private key PEM for adjudication artifact signatures")
+    ap.add_argument("--issuer", default="claimbench-edu-local")
+    args = ap.parse_args(argv)
+    run_server(args.workspace, args.host, args.port, args.sign_private_key, args.issuer)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

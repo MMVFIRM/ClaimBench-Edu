@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def safe_id(s: str) -> str:
+    base = "".join(c.lower() if c.isalnum() else "-" for c in s.strip())
+    base = "-".join(x for x in base.split("-") if x)
+    return base[:60] or "item"
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def canonical_json(data: Dict[str, Any]) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+class StudioStore:
+    def __init__(self, workspace: str | Path):
+        self.root = Path(workspace).resolve()
+        self.projects_dir = self.root / "projects"
+        self.uploads_dir = self.root / "uploads"
+        self.exports_dir = self.root / "exports"
+        self.artifacts_dir = self.root / "adjudication_artifacts"
+        self._init_dirs()
+
+    def _init_dirs(self) -> None:
+        for p in [self.root, self.projects_dir, self.uploads_dir, self.exports_dir, self.artifacts_dir]:
+            p.mkdir(parents=True, exist_ok=True)
+        for fname in ["rlhf_training.jsonl", "validation_labels.jsonl", "panel_labels.jsonl", "disputed_labels.jsonl", "do_not_use.jsonl"]:
+            path = self.exports_dir / fname
+            if not path.exists():
+                path.write_text("", encoding="utf-8")
+
+    def project_path(self, project_id: str) -> Path:
+        return self.projects_dir / project_id / "project.json"
+
+    def load_project(self, project_id: str) -> Dict[str, Any]:
+        path = self.project_path(project_id)
+        if not path.exists():
+            raise KeyError(f"Unknown project: {project_id}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def save_project(self, project: Dict[str, Any]) -> None:
+        project_id = project["id"]
+        pdir = self.projects_dir / project_id
+        pdir.mkdir(parents=True, exist_ok=True)
+        project["updated_at"] = now_iso()
+        (pdir / "project.json").write_text(json.dumps(project, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for path in sorted(self.projects_dir.glob("*/project.json")):
+            try:
+                p = json.loads(path.read_text(encoding="utf-8"))
+                out.append({
+                    "id": p.get("id"),
+                    "title": p.get("title"),
+                    "paper_id": p.get("paper_id"),
+                    "created_at": p.get("created_at"),
+                    "updated_at": p.get("updated_at"),
+                    "claim_count": len(p.get("claims", [])),
+                })
+            except Exception:
+                continue
+        return out
+
+    def create_project(self, filename: str, content: bytes, text: str, extraction_method: str, proposed_claims: List[Dict[str, Any]]) -> Dict[str, Any]:
+        digest = sha256_bytes(content or text.encode("utf-8", errors="replace"))
+        stem = Path(filename).stem or "paper"
+        project_id = f"{safe_id(stem)}-{digest[:10]}"
+        pdir = self.projects_dir / project_id
+        pdir.mkdir(parents=True, exist_ok=True)
+        upload_name = f"{safe_id(Path(filename).name)}-{digest[:10]}"
+        upload_path = self.uploads_dir / upload_name
+        upload_path.write_bytes(content)
+        text_path = pdir / "extracted_text.txt"
+        text_path.write_text(text or "", encoding="utf-8")
+        project = {
+            "id": project_id,
+            "title": stem,
+            "paper_id": project_id,
+            "source_filename": filename,
+            "upload_path": str(upload_path.relative_to(self.root)),
+            "source_sha256": digest,
+            "extraction_method": extraction_method,
+            "extraction_provenance": "machine_extracted" if text else "manual_required",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "artifact_links": [],
+            "claims": [dict(c) for c in proposed_claims],
+            "notes": [],
+        }
+        self.save_project(project)
+        return project
+
+    def append_export(self, filename: str, row: Dict[str, Any]) -> None:
+        path = self.exports_dir / filename
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def write_adjudication_artifact(self, artifact: Dict[str, Any]) -> Path:
+        artifact_core = artifact.get("artifact_core", artifact)
+        ahash = hashlib.sha256(canonical_json(artifact_core).encode("utf-8")).hexdigest()
+        artifact["artifact_hash_sha256"] = ahash
+        fname = f"{artifact_core.get('record_id','record')}-{ahash[:12]}.adjudication.json"
+        path = self.artifacts_dir / fname
+        path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        return path
+
+    def export_paths(self) -> Dict[str, str]:
+        return {p.name: str(p) for p in sorted(self.exports_dir.glob("*.jsonl"))}

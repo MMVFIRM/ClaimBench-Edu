@@ -1,0 +1,56 @@
+# ClaimBench v2.1 Signing and Reproduction Model
+
+ClaimBench uses Ed25519 signatures for two integrity objects, and a separate conformance layer to verify that signed certificate cores actually reproduce.
+
+## 1. Signed certificate core
+
+The certificate JSON has:
+
+- `certificate_core`: deterministic, canonicalized, hashable output of the badge engine
+- `core_hash_sha256`: SHA-256 of canonical `certificate_core`
+- `run_envelope`: timestamp and run metadata excluded from the hash
+- `signatures`: optional Ed25519 signatures over canonical `certificate_core`
+
+The signature proves integrity of the stored deterministic certificate core. It does not prove the claim is true, that an LLM formalization was faithful, or that the stored badge follows from the package. Conformance/reproduction verification performs that stronger check.
+
+## 2. Signed package envelope
+
+A signed package has:
+
+```json
+{
+  "schema": "claimbench.signed_package.v2.1",
+  "package": {},
+  "signatures": []
+}
+```
+
+The signature proves that the package payload has not changed since signing.
+
+## 3. Commands
+
+```bash
+claimbench keygen --out keys --issuer "ClaimBench Dev"
+claimbench sign-package examples/agent_safety_verified.yaml --private-key keys/claimbench_ed25519_private.pem --out signed/package.json
+claimbench verify-package signed/package.json --public-key keys/claimbench_ed25519_public.pem
+claimbench evaluate examples/agent_safety_verified.yaml --sign-private-key keys/claimbench_ed25519_private.pem --out reports
+claimbench verify-certificate reports/agent_safety_verified.certificate.json --public-key keys/claimbench_ed25519_public.pem
+```
+
+## 4. Signature vs reproduction
+
+A valid signature answers: **Who signed this stored core?**
+
+It does not answer: **Does this badge follow from the claim package?**
+
+For that, run:
+
+```bash
+claimbench verify-reproduction reports/agent_safety_verified.certificate.json \
+  --package examples/agent_safety_verified.yaml \
+  --public-key keys/claimbench_ed25519_public.pem
+```
+
+`verify-certificate` in v2.1 now checks both signature validity and core self-consistency. `verify-reproduction` adds optional package-level replay and is the preferred third-party verification path.
+
+Doctrine: **signature = trust; reproduction = verification.**

@@ -1,0 +1,247 @@
+metadata:
+  claim_id: CB-GEO-001
+  title: GeoDistill Compression Budget Claim
+  owner: MMV Firm Demo
+  version: 1.0.0
+claim:
+  statement: GeoDistill outperforms standard distillation under the same compression
+    budget.
+  frozen_at: '2026-06-28T00:00:00Z'
+  record:
+  - id: S1
+    source: experiment_note.md
+    text: GeoDistill outperforms standard distillation
+  - id: S2
+    source: experiment_note.md
+    text: under the same compression budget
+  - id: S3
+    source: metric_card.md
+    text: stored_float_count includes decoder parameters and stored basis values
+  - id: S4
+    source: metric_card.md
+    text: learned_param_count counts learned trainable parameters only
+scope:
+  standard_version: 0.2.1
+  claim_class: model_improvement
+  materiality: A difference is material if the interpretation of compression budget
+    changes pass/fail on the declared benchmark.
+verifier:
+  id: compression-budget-harness-v1
+  type: deterministic_threshold
+  pass_condition: method_delta > 0 under selected budget accounting
+formalizations:
+- id: F1
+  role: canonical
+  kind: semantic
+  description: Same compression budget means equal stored-float budget.
+  grounding_spans:
+  - S1
+  - S2
+  - S3
+  changed_primitives:
+  - compression_budget
+  admission:
+    status: admitted
+    gates:
+      frozen_record:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      span_grounding:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      semantic_difference:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      materiality:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      minimal_change:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      structure_preservation:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      parity:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      symmetry:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      adversarial_review:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      publication:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+  verdict:
+    status: pass
+    summary: GeoDistill beats baseline under equal stored-float budget.
+    metrics:
+      method_delta: 0.021
+      budget_type: stored_float_count
+- id: F2
+  role: alternative
+  kind: semantic
+  description: Same compression budget means equal learned-parameter budget.
+  grounding_spans:
+  - S1
+  - S2
+  - S4
+  changed_primitives:
+  - compression_budget
+  admission:
+    status: admitted
+    gates:
+      frozen_record:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      span_grounding:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      semantic_difference:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      materiality:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      minimal_change:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      structure_preservation:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      parity:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      symmetry:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      adversarial_review:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      publication:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+  verdict:
+    status: fail
+    summary: GeoDistill does not beat baseline under equal learned-parameter accounting.
+    metrics:
+      method_delta: -0.006
+      budget_type: learned_param_count
+- id: F3
+  role: alternative
+  kind: semantic
+  description: Same compression budget means equal wall-clock runtime.
+  grounding_spans:
+  - S2
+  changed_primitives:
+  - compression_budget
+  admission:
+    status: rejected
+    reason: Runtime budget is not grounded in the frozen claim record.
+    gates:
+      frozen_record:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      span_grounding:
+        status: fail
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      semantic_difference:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      materiality:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      minimal_change:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      structure_preservation:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      parity:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      symmetry:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      adversarial_review:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      publication:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+  verdict:
+    status: pass
+    summary: Candidate runtime reading rejected as unsupported.
+    metrics:
+      method_delta: 0.04
+      budget_type: runtime
+evidence:
+  artifacts: examples/artifacts/geodistill_results.csv
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 42
+  notes: Demo evidence only.

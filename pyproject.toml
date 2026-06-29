@@ -1,0 +1,41 @@
+# ClaimBench Roadmap
+
+## v0.2.1 / current package
+
+- Deterministic badge algebra
+- Gate provenance model
+- Certified vs asserted admission
+- Deterministic certificate core hash
+- Run envelope split
+- Refuted with Evidentiary Gaps precedence
+- Examples and unit tests
+
+## v0.2
+
+- CLI-assisted package creation
+- Stronger schema validation for gate objects
+- Formal certificate signing
+- Local artifact manifest hashing
+- Reviewer identity and adjudication logs
+
+## v0.3
+
+- LLM-assisted canonical formalization proposal
+- LLM-assisted adversarial alternative proposal
+- Human review workflow for gate adjudication
+- Claim refinement suggestions for Semantic Boundary
+
+## v0.4
+
+- Verifier plugins
+- Statistical power helpers
+- CI/CD integration
+- GitHub badge output
+
+## v1.0 commercial
+
+- Hosted dashboard
+- Team workspaces
+- Audit trails
+- Private benchmark libraries
+- Enterprise reporting and policy mapping

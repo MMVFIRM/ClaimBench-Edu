@@ -1,0 +1,29 @@
+# ClaimBench Operating Doctrine v2.1
+
+## 1. ClaimBench does not sell green checks
+
+ClaimBench sells trustworthy claim adjudication. A green check is only one possible output.
+
+## 2. Boundary is not a consolation prize
+
+A Semantic Boundary exists only when two or more certified-admitted semantic formalizations produce different pass/fail verdicts. Candidate readings that lack textual grounding, alter evidence rather than meaning, or exist only to change the verdict are disclosed but excluded.
+
+## 3. Inconclusive does not launder fail
+
+If a claim fails under an admitted faithful reading and another admitted channel is inconclusive, the result is **Refuted with Evidentiary Gaps**. The inconclusive channel is disclosed, but it does not soften the fail into a generic "jury's out" badge.
+
+## 4. Gate provenance is part of the result
+
+A passed gate is not enough. The certificate must state whether the gate was recomputed by the kernel, adjudicated by ClaimBench, or asserted by the submitter.
+
+## 5. Self-attestation is not certification
+
+A package that relies on submitter-asserted gates may receive an assertion-contingent projected badge, but it does not receive a ClaimBench-certified badge.
+
+## 6. Determinism localizes failure
+
+The deterministic kernel does not remove fuzziness from formalization. It makes that fuzziness inspectable by ensuring the rest of the certificate core is stable, replayable, and hashable.
+
+## 7. The standard is the moat
+
+The durable product is not the code alone. It is the published, versioned standard: admission thresholds, badge precedence, evidence separation, and disclosure discipline.

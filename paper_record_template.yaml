@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claimbench.local/schema/claimbench.schema.json",
+  "title": "ClaimBench Package v2.0",
+  "type": "object",
+  "required": ["metadata", "claim", "scope", "verifier", "formalizations"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["claim_id", "title", "owner", "version"],
+      "properties": {
+        "claim_id": {"type": "string"},
+        "title": {"type": "string"},
+        "owner": {"type": "string"},
+        "version": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "claim": {
+      "type": "object",
+      "required": ["statement", "record"],
+      "properties": {
+        "statement": {"type": "string"},
+        "frozen_at": {"type": "string"},
+        "record": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "source", "text"],
+            "properties": {
+              "id": {"type": "string"},
+              "source": {"type": "string"},
+              "text": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "scope": {
+      "type": "object",
+      "required": ["standard_version", "claim_class", "materiality"],
+      "properties": {
+        "standard_version": {"type": "string"},
+        "claim_class": {"type": "string"},
+        "materiality": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "verifier": {
+      "type": "object",
+      "required": ["id", "type", "pass_condition"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "pass_condition": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "formalizations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "kind", "description", "grounding_spans", "admission", "verdict"],
+        "properties": {
+          "id": {"type": "string"},
+          "role": {"enum": ["canonical", "alternative"]},
+          "kind": {"enum": ["semantic", "evidentiary", "out_of_scope"]},
+          "description": {"type": "string"},
+          "grounding_spans": {"type": "array", "items": {"type": "string"}},
+          "changed_primitives": {"type": "array", "items": {"type": "string"}},
+          "admission": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": {"enum": ["admitted", "rejected"]},
+              "reason": {"type": "string"},
+              "gates": {
+                "type": "object",
+                "additionalProperties": {
+                  "oneOf": [
+                    {"enum": ["pass", "fail", "passed", "failed", true, false]},
+                    {
+                      "type": "object",
+                      "required": ["status"],
+                      "properties": {
+                        "status": {"enum": ["pass", "fail", "missing", "unknown"]},
+                        "source": {"enum": ["kernel_recomputed", "claimbench_adjudicated", "submitter_asserted", "llm_proposed"]},
+                        "producer": {"type": "string"},
+                        "reason": {"type": "string"}
+                      },
+                      "additionalProperties": true
+                    }
+                  ]
+                }
+              }
+            },
+            "additionalProperties": true
+          },
+          "verdict": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+              "status": {"enum": ["pass", "fail", "inconclusive"]},
+              "summary": {"type": "string"},
+              "metrics": {"type": "object"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "evidence": {"type": "object"}
+  },
+  "additionalProperties": true
+}

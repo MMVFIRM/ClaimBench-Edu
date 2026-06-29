@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+from .studio import run_server
+from .storage import StudioStore
+
+
+def _cmd_studio(args: argparse.Namespace) -> int:
+    run_server(args.workspace, args.host, args.port, args.sign_private_key, args.issuer)
+    return 0
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    store = StudioStore(args.workspace)
+    print(f"Initialized ClaimBench Edu workspace: {store.root}")
+    print(f"Exports: {store.exports_dir}")
+    print("Run: claimbench-edu studio --workspace " + str(store.root))
+    return 0
+
+
+def _cmd_exports(args: argparse.Namespace) -> int:
+    store = StudioStore(args.workspace)
+    print(json.dumps(store.export_paths(), indent=2))
+    return 0
+
+
+def _cmd_smoke(args: argparse.Namespace) -> int:
+    root = Path(__file__).resolve().parents[2]
+    papers = root / "smoke" / "smoke_papers.yaml"
+    labels = root / "smoke" / "smoke_labels.yaml"
+    cmd = [
+        sys.executable,
+        str(root / "src" / "realcorpus" / "run_realcorpus.py"),
+        "--papers",
+        str(papers),
+        "--labels",
+        str(labels),
+        "--synthetic",
+    ]
+    env = dict(**dict())
+    return subprocess.call(cmd)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="claimbench-edu", description="ClaimBench Edu academic open-source suite")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("studio", help="Run the local Studio web UI")
+    s.add_argument("--workspace", default="claimbench_edu_workspace")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--sign-private-key", help="Optional Ed25519 private key PEM for adjudication artifacts")
+    s.add_argument("--issuer", default="claimbench-edu-local")
+    s.set_defaults(func=_cmd_studio)
+
+    i = sub.add_parser("init", help="Initialize a local Studio workspace")
+    i.add_argument("--workspace", default="claimbench_edu_workspace")
+    i.set_defaults(func=_cmd_init)
+
+    e = sub.add_parser("exports", help="List export files for a Studio workspace")
+    e.add_argument("--workspace", default="claimbench_edu_workspace")
+    e.set_defaults(func=_cmd_exports)
+
+    sm = sub.add_parser("smoke", help="Run the synthetic real-corpus smoke guard")
+    sm.set_defaults(func=_cmd_smoke)
+    return p
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

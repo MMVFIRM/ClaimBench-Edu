@@ -1,0 +1,170 @@
+metadata:
+  claim_id: CB-MODEL-001
+  title: Model Improvement Claim
+  owner: ExampleLab
+  version: 1.0.0
+claim:
+  statement: Method A outperforms the MSE baseline under equal stored-float budget
+    on the declared task suite.
+  frozen_at: '2026-06-28T00:00:00Z'
+  record:
+  - id: S1
+    source: README.md
+    text: outperforms the MSE baseline
+  - id: S2
+    source: benchmark_card.md
+    text: equal stored-float budget
+  - id: S3
+    source: benchmark_card.md
+    text: 'declared task suite: arc_easy, boolq, hellaswag'
+scope:
+  standard_version: 0.2.1
+  claim_class: model_improvement
+  materiality: A difference is material if it changes whether mean task accuracy exceeds
+    the baseline by at least 0.01.
+verifier:
+  id: improvement-threshold-v1
+  type: deterministic_threshold
+  pass_condition: mean_accuracy_delta >= 0.01
+formalizations:
+- id: F1
+  role: canonical
+  kind: semantic
+  description: Method A must beat MSE by at least 0.01 mean accuracy across arc_easy,
+    boolq, hellaswag under equal stored-float budget.
+  grounding_spans:
+  - S1
+  - S2
+  - S3
+  changed_primitives: []
+  admission:
+    status: admitted
+    gates:
+      frozen_record:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      span_grounding:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      semantic_difference:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      materiality:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      minimal_change:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      structure_preservation:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      parity:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      symmetry:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      adversarial_review:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      publication:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+  verdict:
+    status: fail
+    summary: Mean accuracy delta was -0.004; declared margin not met.
+    metrics:
+      mean_accuracy_delta: -0.004
+      required_delta: 0.01
+- id: F2
+  role: alternative
+  kind: semantic
+  description: Method A only needs to win one task in the suite.
+  grounding_spans:
+  - S1
+  - S3
+  changed_primitives:
+  - outperforms
+  admission:
+    status: rejected
+    reason: The frozen record says declared task suite and does not ground one-task
+      cherry picking.
+    gates:
+      frozen_record:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      span_grounding:
+        status: fail
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+      semantic_difference:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      materiality:
+        status: pass
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      minimal_change:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      structure_preservation:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      parity:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      symmetry:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      adversarial_review:
+        status: fail
+        source: claimbench_adjudicated
+        producer: claimbench_standard_v0.2.1_demo
+        reason: ''
+      publication:
+        status: pass
+        source: kernel_recomputed
+        producer: claimbench_kernel
+        reason: ''
+  verdict:
+    status: pass
+    summary: One-task interpretation would pass but is rejected as verdict-shopping.
+    metrics:
+      best_task_delta: 0.03
+evidence:
+  artifacts: examples/artifacts/model_improvement_results.csv
+  notes: Demo evidence only.

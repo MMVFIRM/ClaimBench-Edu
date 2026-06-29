@@ -1,0 +1,3 @@
+"""ClaimBench Edu: academic open-source Studio + validation suite."""
+
+__version__ = "0.1.0"

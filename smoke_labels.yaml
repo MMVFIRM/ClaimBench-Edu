@@ -1,0 +1,85 @@
+# ClaimBench Architecture v2.1
+
+ClaimBench is split into seven layers:
+
+1. **Frozen claim record** — the immutable text and artifacts available before evaluation.
+2. **Formalization layer** — canonical and candidate readings grounded in record spans.
+3. **Formalizer interface** — optional automated draft generation for canonical/adversarial formalizations.
+4. **Admission layer** — strict gates deciding which readings enter the badge calculation.
+5. **Badge algebra kernel** — deterministic classification over certified-admitted verdicts.
+6. **Certificate layer** — deterministic certificate core plus run envelope.
+7. **Signature layer** — Ed25519 signing and verification of package payloads and certificate cores.
+
+## Why the kernel is deterministic
+
+ClaimBench v2.1 does not claim the whole system is deterministic. The natural-language front door is fuzzy. The deterministic kernel exists to localize failures so that a wrong certificate is attributable to formalization/admission failure, not random verifier behavior or report generation.
+
+## Formalizer boundary
+
+The formalizer layer proposes draft formalizations. It may use an offline mock, a local command, or a generic HTTP JSON endpoint.
+
+Formalizer-generated gates are `llm_proposed`, which is non-certifying. This prevents the formalizer from laundering its own draft into a ClaimBench-certified badge.
+
+## Admission provenance
+
+Every admission gate has a source:
+
+- `kernel_recomputed`: checked directly by the deterministic kernel.
+- `claimbench_adjudicated`: produced by ClaimBench's published procedure.
+- `submitter_asserted`: supplied by the package author and disclosed as self-attestation.
+- `llm_proposed`: supplied by an automated formalizer and disclosed as non-certifying.
+
+Only `kernel_recomputed` and `claimbench_adjudicated` gates support a certified badge. Submitter-asserted and LLM-proposed gates produce **Self-Attested Only** unless adjudicated.
+
+## Kernel-recomputed gates
+
+v2.1 recomputes:
+
+- frozen record presence
+- span grounding
+- publication into the certificate core
+
+The other gates remain adjudicative and are explicitly labeled by provenance.
+
+## Badge algebra
+
+The kernel classifies certified-admitted semantic formalizations:
+
+- all pass → Verified
+- all fail → Refuted
+- pass/fail split → Semantic Boundary
+- all inconclusive → Evidentiary Inconclusive
+- fail + inconclusive, no pass → Refuted with Evidentiary Gaps
+- pass + inconclusive, no fail → Evidentiary Inconclusive
+- no certified semantic formalization → Out of Scope or Self-Attested Only
+
+## Certificate replay
+
+The JSON certificate contains:
+
+- `certificate_core`: deterministic, hashable, replayable output
+- `core_hash_sha256`: hash over the canonical JSON core
+- `run_envelope`: timestamp and runner metadata outside the hash
+- `signatures`: optional Ed25519 signatures over the canonical certificate core
+
+This preserves logical replay while reporting when a run occurred.
+
+## Signing architecture
+
+- Package signatures sign the package payload.
+- Certificate signatures sign the deterministic certificate core.
+- The timestamp is not signed as part of the core.
+- A signature proves integrity and signer control, not semantic truth.
+
+## Claim classes in v2.1
+
+The package ships examples for:
+
+- agent safety claims
+- model improvement claims
+- semantic boundary claims
+- evidentiary inconclusive claims
+- refuted-with-gap claims
+- out-of-scope claims
+- self-attested probes
+- formalizer-generated draft packages

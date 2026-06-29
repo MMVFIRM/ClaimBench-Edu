@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Tuple
+
+from validation.null_reconstructor import adjudicate as null_reconstructor_adjudicate
+
+CLAIM_KEYWORDS = [
+    "outperform", "outperforms", "outperformed", "improve", "improves", "improved",
+    "better", "beats", "beat", "state-of-the-art", "sota", "achieves", "achieve",
+    "higher", "lower", "reduces", "reduction", "increases", "gain", "accuracy",
+    "f1", "auc", "bleu", "rouge", "perplexity", "error", "latency", "compression",
+]
+
+@dataclass
+class ProposedClaim:
+    id: str
+    statement: str
+    confidence: str
+    reason: str
+
+
+def extract_text_from_upload(filename: str, content: bytes) -> Tuple[str, str]:
+    """Best-effort text extraction.
+
+    TXT/MD are decoded directly. PDF extraction uses pypdf if installed. If not,
+    the uploaded PDF is still stored and the UI can be used for manual claim entry.
+    """
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if suffix in {"txt", "md", "markdown", "csv", "json", "yaml", "yml"}:
+        return content.decode("utf-8", errors="replace"), "direct_text"
+    if suffix == "pdf":
+        try:
+            import io
+            from pypdf import PdfReader  # type: ignore
+            reader = PdfReader(io.BytesIO(content))
+            pages = []
+            for page in reader.pages:
+                pages.append(page.extract_text() or "")
+            text = "\n\n".join(pages).strip()
+            if text:
+                return text, "pypdf"
+            return "", "pdf_no_extractable_text"
+        except Exception as exc:  # pragma: no cover - depends on optional pypdf
+            return "", f"pdf_extraction_unavailable:{type(exc).__name__}"
+    return content.decode("utf-8", errors="replace"), "fallback_decode"
+
+
+def split_sentences(text: str) -> List[str]:
+    compact = re.sub(r"\s+", " ", text or " ").strip()
+    if not compact:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", compact)
+    return [p.strip() for p in parts if len(p.strip()) > 30]
+
+
+def propose_claims(text: str, max_claims: int = 12) -> List[ProposedClaim]:
+    claims: List[ProposedClaim] = []
+    seen = set()
+    for sent in split_sentences(text):
+        low = sent.lower()
+        hits = [kw for kw in CLAIM_KEYWORDS if kw in low]
+        if not hits:
+            continue
+        normalized = re.sub(r"\W+", " ", low)[:160]
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        conf = "medium" if len(hits) >= 2 else "low"
+        claims.append(ProposedClaim(
+            id=f"C{len(claims)+1}",
+            statement=sent[:900],
+            confidence=conf,
+            reason="keyword hits: " + ", ".join(sorted(set(hits))[:8]),
+        ))
+        if len(claims) >= max_claims:
+            break
+    return claims
+
+
+def infer_subclass(statement: str, evidence: Dict[str, Any]) -> str:
+    s = (statement or "").lower()
+    if "budget" in s or "compression" in s or evidence.get("budget"):
+        return "budget_normalized"
+    if "safety" in s or "cannot" in s or "unauthorized" in s:
+        return "agent_safety"
+    return "metric_comparison"
+
+
+def build_evidence_from_form(form: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert Studio form fields into the real-corpus evidence shape."""
+    def as_float(x):
+        try:
+            if x in (None, ""):
+                return None
+            return float(x)
+        except Exception:
+            return None
+
+    method_score = as_float(form.get("method_score"))
+    baseline_score = as_float(form.get("baseline_score"))
+    higher_better = str(form.get("higher_better", "true")).lower() not in {"false", "0", "no", "lower"}
+    fair = str(form.get("baseline_fair", "true")).lower() not in {"false", "0", "no"}
+    fairness_source = form.get("fairness_source") or "self_reported"
+    baseline_name = form.get("baseline_name") or "reported_baseline"
+    method_name = form.get("method_name") or "claimed_method"
+    metric_name = form.get("metric_name") or "reported_metric"
+
+    evidence = {
+        "metric": {"name": metric_name, "higher_better": higher_better},
+        "method": {"name": method_name, "score": method_score},
+        "baselines": [{
+            "name": baseline_name,
+            "score": baseline_score,
+            "fair": fair,
+            "fairness_source": fairness_source,
+        }],
+    }
+    if form.get("method_std") not in (None, ""):
+        evidence["method"]["std"] = as_float(form.get("method_std"))
+    if form.get("baseline_std") not in (None, ""):
+        evidence["baselines"][0]["std"] = as_float(form.get("baseline_std"))
+    if form.get("budget"):
+        evidence["budget"] = form.get("budget")
+    return evidence
+
+
+def proposed_grade(statement: str, evidence: Dict[str, Any], strictness: str = "strict_fairness") -> Dict[str, Any]:
+    subclass = infer_subclass(statement, evidence)
+    verdict, reason = null_reconstructor_adjudicate(
+        claim_class="comparative_empirical",
+        evidence=evidence,
+        alternative_readings=[],
+        strictness=strictness,
+    )
+    badge_map = {
+        "pass": "Projected Verified",
+        "fail": "Projected Refuted",
+        "semantic_boundary": "Projected Semantic Boundary",
+        "evidentiary_inconclusive": "Projected Evidentiary Inconclusive",
+        "out_of_scope": "Projected Out of Scope",
+    }
+    return {
+        "mode": "machine_proposed",
+        "claim_class": "comparative_empirical",
+        "subclass": subclass,
+        "verdict": verdict,
+        "badge": badge_map.get(verdict, "Projected Out of Scope"),
+        "reason": reason,
+        "strictness": strictness,
+        "evidence": evidence,
+    }
+
+
+def make_record(project: Dict[str, Any], claim: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": claim["id"],
+        "paper_id": project.get("paper_id", project.get("id", "")),
+        "title": project.get("title", ""),
+        "claim_statement": claim.get("statement", ""),
+        "claim_class": claim.get("proposal", {}).get("claim_class", "comparative_empirical"),
+        "subclass": claim.get("proposal", {}).get("subclass", "unknown"),
+        "evidence": claim.get("proposal", {}).get("evidence", {}),
+        "evidence_spans": claim.get("evidence_spans", []),
+        "extraction_provenance": claim.get("extraction_provenance", project.get("extraction_provenance", "human_verified")),
+        "extracted_by": claim.get("extracted_by", "claimbench_studio"),
+        "artifact_links": project.get("artifact_links", []),
+        "alternative_readings": claim.get("alternative_readings", []),
+    }
